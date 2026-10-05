@@ -1,0 +1,1134 @@
+-- 🦊 FOX_SHOP - Sky Drop Detector
+-- TEST VERSION - Roblox Studio
+-- Password + ProximityPrompt + Equation Solver
+-- Draggable UI
+-- Anti Players / Vehicles / Aircraft
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local PASSWORD = "FOX123"
+
+local enabled = false
+local candidates = {}
+local lastTeleport = 0
+local waitingForManualSolve = false
+local currentDrop = nil
+
+-- =========================
+-- الإعدادات
+-- =========================
+
+local SCAN_DISTANCE = 500
+local MIN_HEIGHT = 15
+
+local MIN_FALL_SPEED = 2
+local SPEED_TOLERANCE = 8
+
+local TELEPORT_COOLDOWN = 2
+local MIN_SAMPLES = 5
+
+local PROMPT_HOLD_TIME = 2
+
+-- أقصى مدة لانتظار ظهور المعادلة
+local EQUATION_TIMEOUT = 10
+
+-- =========================
+-- دالة جعل الواجهة قابلة للتحريك
+-- تعمل بالماوس واللمس
+-- =========================
+
+local function makeDraggable(frame)
+
+	local dragging = false
+	local dragStart = nil
+	local startPosition = nil
+	local dragInput = nil
+
+	local function update(input)
+
+		if not dragging then
+			return
+		end
+
+		local delta = input.Position - dragStart
+
+		frame.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+
+	end
+
+	frame.InputBegan:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragging = true
+
+			dragStart = input.Position
+			startPosition = frame.Position
+
+			input.Changed:Connect(function()
+
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+
+			end)
+
+		end
+
+	end)
+
+	frame.InputChanged:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+
+			dragInput = input
+
+		end
+
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+
+		if input == dragInput then
+			update(input)
+		end
+
+	end)
+
+end
+
+-- =========================
+-- واجهة كلمة السر
+-- =========================
+
+local passwordGui = Instance.new("ScreenGui")
+passwordGui.Name = "FOX_SHOP_PASSWORD"
+passwordGui.ResetOnSpawn = false
+passwordGui.IgnoreGuiInset = true
+passwordGui.Parent = playerGui
+
+local passwordFrame = Instance.new("Frame")
+passwordFrame.Size = UDim2.new(0, 280, 0, 190)
+passwordFrame.Position = UDim2.new(0.5, -140, 0.5, -95)
+passwordFrame.BackgroundColor3 = Color3.fromRGB(35, 22, 15)
+passwordFrame.BorderSizePixel = 0
+passwordFrame.Active = true
+passwordFrame.Parent = passwordGui
+
+local passwordCorner = Instance.new("UICorner")
+passwordCorner.CornerRadius = UDim.new(0, 15)
+passwordCorner.Parent = passwordFrame
+
+local passwordStroke = Instance.new("UIStroke")
+passwordStroke.Color = Color3.fromRGB(255, 120, 20)
+passwordStroke.Thickness = 2
+passwordStroke.Parent = passwordFrame
+
+local passwordTitle = Instance.new("TextLabel")
+passwordTitle.Size = UDim2.new(1, 0, 0, 45)
+passwordTitle.BackgroundTransparency = 1
+passwordTitle.Text = "🦊 FOX_SHOP"
+passwordTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+passwordTitle.TextSize = 21
+passwordTitle.Font = Enum.Font.GothamBold
+passwordTitle.Parent = passwordFrame
+
+local passwordInfo = Instance.new("TextLabel")
+passwordInfo.Size = UDim2.new(1, -20, 0, 30)
+passwordInfo.Position = UDim2.new(0, 10, 0, 43)
+passwordInfo.BackgroundTransparency = 1
+passwordInfo.Text = "🔐 أدخل كلمة السر"
+passwordInfo.TextColor3 = Color3.fromRGB(220, 220, 220)
+passwordInfo.TextSize = 14
+passwordInfo.Font = Enum.Font.Gotham
+passwordInfo.Parent = passwordFrame
+
+local passwordBox = Instance.new("TextBox")
+passwordBox.Size = UDim2.new(1, -40, 0, 40)
+passwordBox.Position = UDim2.new(0, 20, 0, 78)
+passwordBox.BackgroundColor3 = Color3.fromRGB(55, 35, 23)
+passwordBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+passwordBox.PlaceholderText = "كلمة السر..."
+passwordBox.PlaceholderColor3 = Color3.fromRGB(160, 160, 160)
+passwordBox.TextSize = 16
+passwordBox.Font = Enum.Font.Gotham
+passwordBox.ClearTextOnFocus = false
+passwordBox.Text = ""
+passwordBox.Parent = passwordFrame
+
+local boxCorner = Instance.new("UICorner")
+boxCorner.CornerRadius = UDim.new(0, 8)
+boxCorner.Parent = passwordBox
+
+local loginButton = Instance.new("TextButton")
+loginButton.Size = UDim2.new(1, -40, 0, 40)
+loginButton.Position = UDim2.new(0, 20, 0, 128)
+loginButton.BackgroundColor3 = Color3.fromRGB(255, 120, 20)
+loginButton.Text = "دخول"
+loginButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+loginButton.TextSize = 16
+loginButton.Font = Enum.Font.GothamBold
+loginButton.BorderSizePixel = 0
+loginButton.Parent = passwordFrame
+
+local loginCorner = Instance.new("UICorner")
+loginCorner.CornerRadius = UDim.new(0, 8)
+loginCorner.Parent = loginButton
+
+-- جعل نافذة كلمة السر قابلة للتحريك
+makeDraggable(passwordFrame)
+
+-- =========================
+-- الواجهة الرئيسية
+-- =========================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "FOX_SHOP_SkyDrop"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Enabled = false
+gui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 240, 0, 125)
+frame.Position = UDim2.new(0.5, -120, 0.5, -62)
+frame.BackgroundColor3 = Color3.fromRGB(35, 22, 15)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 15)
+corner.Parent = frame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(255, 120, 20)
+stroke.Thickness = 2
+stroke.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 38)
+title.BackgroundTransparency = 1
+title.Text = "🦊 FOX_SHOP"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 19
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -20, 0, 25)
+status.Position = UDim2.new(0, 10, 0, 37)
+status.BackgroundTransparency = 1
+status.Text = "🔴 يبحث: متوقف"
+status.TextColor3 = Color3.fromRGB(220, 220, 220)
+status.TextSize = 13
+status.Font = Enum.Font.Gotham
+status.Parent = frame
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 200, 0, 43)
+button.Position = UDim2.new(0.5, -100, 0, 75)
+button.BackgroundColor3 = Color3.fromRGB(255, 120, 20)
+button.Text = "▶ تشغيل"
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.TextSize = 17
+button.Font = Enum.Font.GothamBold
+button.BorderSizePixel = 0
+button.Parent = frame
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 10)
+buttonCorner.Parent = button
+
+-- جعل الواجهة الرئيسية قابلة للتحريك
+makeDraggable(frame)
+
+-- =========================
+-- كلمة السر
+-- =========================
+
+local unlocked = false
+
+local function unlock()
+
+	if passwordBox.Text == PASSWORD then
+
+		unlocked = true
+
+		passwordFrame.Visible = false
+		gui.Enabled = true
+
+		status.Text = "🔴 يبحث: متوقف"
+
+	else
+
+		passwordInfo.Text = "❌ كلمة السر خاطئة"
+
+		passwordBox.Text = ""
+
+	end
+
+end
+
+loginButton.MouseButton1Click:Connect(unlock)
+
+passwordBox.FocusLost:Connect(function(enterPressed)
+
+	if enterPressed then
+		unlock()
+	end
+
+end)
+
+-- =========================
+-- الحصول على اللاعب
+-- =========================
+
+local function getRoot()
+
+	local character = player.Character
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild("HumanoidRootPart")
+
+end
+
+-- =========================
+-- هل الجسم تابع للاعب؟
+-- =========================
+
+local function isPlayerObject(object)
+
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+
+		local character = otherPlayer.Character
+
+		if character and object:IsDescendantOf(character) then
+			return true
+		end
+
+	end
+
+	return false
+
+end
+
+-- =========================
+-- المركبات والطائرات
+-- =========================
+
+local function isVehicleOrAircraft(object)
+
+	local current = object
+
+	while current and current ~= workspace do
+
+		if current:IsA("Model") then
+
+			local name = string.lower(current.Name)
+
+			local vehicleWords = {
+				"car",
+				"vehicle",
+				"truck",
+				"bus",
+				"boat",
+				"ship",
+				"plane",
+				"airplane",
+				"aircraft",
+				"helicopter",
+				"jet",
+				"jetplane",
+				"drone",
+				"chopper",
+				"train",
+				"bike",
+				"motorcycle",
+				"vehiclemodel"
+			}
+
+			for _, word in ipairs(vehicleWords) do
+
+				if string.find(name, word, 1, true) then
+					return true
+				end
+
+			end
+
+			if current:FindFirstChildWhichIsA("VehicleSeat", true) then
+				return true
+			end
+
+			local seat = current:FindFirstChildWhichIsA("Seat", true)
+
+			if seat then
+
+				local descendants = current:GetDescendants()
+
+				if #descendants >= 4 then
+					return true
+				end
+
+			end
+
+		end
+
+		current = current.Parent
+
+	end
+
+	return false
+
+end
+
+-- =========================
+-- الأجسام الكبيرة
+-- =========================
+
+local function isLargeObject(object)
+
+	if not object:IsA("BasePart") then
+		return true
+	end
+
+	local size = object.Size
+
+	if size.X > 20 or size.Y > 20 or size.Z > 20 then
+		return true
+	end
+
+	return false
+
+end
+
+-- =========================
+-- موديل كبير
+-- =========================
+
+local function isPartOfLargeModel(object)
+
+	local model = object:FindFirstAncestorOfClass("Model")
+
+	if not model then
+		return false
+	end
+
+	if model:FindFirstChildOfClass("Humanoid") then
+		return true
+	end
+
+	if isVehicleOrAircraft(object) then
+		return true
+	end
+
+	local parts = 0
+
+	for _, descendant in ipairs(model:GetDescendants()) do
+
+		if descendant:IsA("BasePart") then
+
+			parts += 1
+
+			if parts > 30 then
+				return true
+			end
+
+		end
+
+	end
+
+	return false
+
+end
+
+-- =========================
+-- تسجيل جسم جديد
+-- =========================
+
+local function registerObject(object)
+
+	if not object:IsA("BasePart") then
+		return
+	end
+
+	if not object:IsDescendantOf(workspace) then
+		return
+	end
+
+	if isPlayerObject(object) then
+		return
+	end
+
+	if isVehicleOrAircraft(object) then
+		return
+	end
+
+	if isLargeObject(object) then
+		return
+	end
+
+	if isPartOfLargeModel(object) then
+		return
+	end
+
+	if object.Transparency >= 1 then
+		return
+	end
+
+	if object.CanQuery == false then
+		return
+	end
+
+	local root = getRoot()
+
+	if not root then
+		return
+	end
+
+	if object.Position.Y < root.Position.Y + MIN_HEIGHT then
+		return
+	end
+
+	local horizontalDistance = (
+		Vector3.new(object.Position.X, 0, object.Position.Z)
+		-
+		Vector3.new(root.Position.X, 0, root.Position.Z)
+	).Magnitude
+
+	if horizontalDistance > SCAN_DISTANCE then
+		return
+	end
+
+	candidates[object] = {
+
+		firstPosition = object.Position,
+		lastPosition = object.Position,
+		lastTime = os.clock(),
+		highestY = object.Position.Y,
+		lastFallSpeed = nil,
+		spawnTime = os.clock(),
+		samples = 0,
+		fallSamples = 0
+
+	}
+
+end
+
+-- =========================
+-- مراقبة الأجسام الجديدة
+-- =========================
+
+workspace.DescendantAdded:Connect(function(object)
+
+	if not enabled then
+		return
+	end
+
+	task.defer(function()
+
+		if enabled and object.Parent then
+			registerObject(object)
+		end
+
+	end)
+
+end)
+
+-- =========================
+-- فحص Drop
+-- =========================
+
+local function checkDrop(object, data)
+
+	if not object or not object.Parent then
+
+		candidates[object] = nil
+
+		return false
+
+	end
+
+	if isPlayerObject(object) then
+
+		candidates[object] = nil
+
+		return false
+
+	end
+
+	if isVehicleOrAircraft(object) then
+
+		candidates[object] = nil
+
+		return false
+
+	end
+
+	if isLargeObject(object) then
+
+		candidates[object] = nil
+
+		return false
+
+	end
+
+	local root = getRoot()
+
+	if not root then
+		return false
+	end
+
+	local now = os.clock()
+
+	local currentPosition = object.Position
+
+	local dt = now - data.lastTime
+
+	if dt <= 0 then
+		return false
+	end
+
+	local verticalSpeed =
+		(currentPosition.Y - data.lastPosition.Y) / dt
+
+	data.samples += 1
+
+	if currentPosition.Y > data.highestY then
+		data.highestY = currentPosition.Y
+	end
+
+	local falling =
+		verticalSpeed < -MIN_FALL_SPEED
+
+	if falling then
+		data.fallSamples += 1
+	end
+
+	local startedHigh =
+		data.highestY >= root.Position.Y + MIN_HEIGHT
+
+	local horizontalDistance = (
+		Vector3.new(currentPosition.X, 0, currentPosition.Z)
+		-
+		Vector3.new(root.Position.X, 0, root.Position.Z)
+	).Magnitude
+
+	local inRange =
+		horizontalDistance <= SCAN_DISTANCE
+
+	local stableSpeed = true
+
+	if data.lastFallSpeed then
+
+		local difference =
+			math.abs(
+				math.abs(verticalSpeed)
+				-
+				data.lastFallSpeed
+			)
+
+		if difference > SPEED_TOLERANCE then
+			stableSpeed = false
+		end
+
+	end
+
+	if falling then
+		data.lastFallSpeed = math.abs(verticalSpeed)
+	end
+
+	data.lastPosition = currentPosition
+	data.lastTime = now
+
+	if
+		data.samples >= MIN_SAMPLES
+		and data.fallSamples >= 3
+		and falling
+		and startedHigh
+		and inRange
+		and stableSpeed
+		and data.lastFallSpeed
+		and data.lastFallSpeed >= MIN_FALL_SPEED
+	then
+
+		return true
+
+	end
+
+	return false
+
+end
+
+-- =========================
+-- العثور على ProximityPrompt
+-- =========================
+
+local function findDropPrompt(drop)
+
+	if not drop or not drop.Parent then
+		return nil
+	end
+
+	local prompt = drop:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+	if prompt and prompt.Enabled then
+		return prompt
+	end
+
+	local model = drop:FindFirstAncestorOfClass("Model")
+
+	if model then
+
+		prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+		if prompt and prompt.Enabled then
+			return prompt
+		end
+
+	end
+
+	return nil
+
+end
+
+-- =========================
+-- تفعيل الـPrompt لمدة ثانيتين
+-- =========================
+
+local function holdDropPrompt(drop)
+
+	local prompt = findDropPrompt(drop)
+
+	if not prompt then
+
+		status.Text = "⚠️ لم يتم العثور على التفاعل"
+
+		return false
+
+	end
+
+	status.Text = "✋ التقاط الـDrop..."
+
+	local holdTime = math.max(
+		PROMPT_HOLD_TIME,
+		prompt.HoldDuration
+	)
+
+	local successBegin = pcall(function()
+		prompt:InputHoldBegin()
+	end)
+
+	if not successBegin then
+
+		status.Text = "⚠️ تعذر بدء التفاعل"
+
+		return false
+
+	end
+
+	task.wait(holdTime)
+
+	pcall(function()
+		prompt:InputHoldEnd()
+	end)
+
+	task.wait(0.25)
+
+	return true
+
+end
+
+-- =========================
+-- البحث عن واجهة المعادلة
+-- =========================
+
+local function findEquationInterface()
+
+	for _, screenGui in ipairs(playerGui:GetChildren()) do
+
+		if screenGui:IsA("ScreenGui") and screenGui.Enabled then
+
+			for _, object in ipairs(screenGui:GetDescendants()) do
+
+				if object:IsA("TextLabel") then
+
+					local text = object.Text
+
+					-- يقبل مثل:
+					-- 3 + 2 = ?
+					-- 10 + 6 = ?
+					local a, b = string.match(
+						text,
+						"^%s*(%d+)%s*%+%s*(%d+)%s*=%s*%?%s*$"
+					)
+
+					if a and b then
+
+						local answerBox = nil
+						local confirmButton = nil
+
+						-- نبحث داخل أقرب Frame للمعادلة
+						local container = object.Parent
+
+						while container
+							and container ~= screenGui
+							and not container:IsA("Frame") do
+
+							container = container.Parent
+
+						end
+
+						if not container then
+							container = object.Parent
+						end
+
+						for _, child in ipairs(container:GetDescendants()) do
+
+							if child:IsA("TextBox") then
+
+								answerBox = child
+
+							elseif child:IsA("TextButton") then
+
+								local buttonText =
+									string.lower(child.Text)
+
+								if string.find(
+									buttonText,
+									"تأكيد",
+									1,
+									true
+								)
+								or string.find(
+									buttonText,
+									"confirm",
+									1,
+									true
+								) then
+
+									confirmButton = child
+
+								end
+
+							end
+
+						end
+
+						if answerBox and confirmButton then
+
+							return {
+								label = object,
+								answerBox = answerBox,
+								confirmButton = confirmButton,
+								a = tonumber(a),
+								b = tonumber(b)
+							}
+
+						end
+
+					end
+
+				end
+
+			end
+
+		end
+
+	end
+
+	return nil
+
+end
+
+-- =========================
+-- حل المعادلة
+-- =========================
+
+local function solveEquation()
+
+	status.Text = "🧩 البحث عن المعادلة..."
+
+	local startTime = os.clock()
+
+	while enabled
+		and os.clock() - startTime < EQUATION_TIMEOUT do
+
+		local equation = findEquationInterface()
+
+		if equation then
+
+			local answer =
+				equation.a + equation.b
+
+			status.Text =
+				"🧮 الإجابة: " .. tostring(answer)
+
+			-- كتابة الإجابة
+			equation.answerBox.Text =
+				tostring(answer)
+
+			task.wait(0.15)
+
+			-- الضغط على زر تأكيد
+			local success = pcall(function()
+
+				equation.confirmButton:Activate()
+
+			end)
+
+			if success then
+
+				status.Text = "✅ تم تأكيد الإجابة"
+
+			else
+
+				status.Text = "⚠️ تعذر الضغط على تأكيد"
+
+				return false
+
+			end
+
+			task.wait(0.5)
+
+			return true
+
+		end
+
+		task.wait(0.1)
+
+	end
+
+	status.Text = "⚠️ لم تظهر نافذة المعادلة"
+
+	return false
+
+end
+
+-- =========================
+-- الانتقال ثم الالتقاط
+-- =========================
+
+local function teleportToDrop(drop)
+
+	if not drop or not drop.Parent then
+		return
+	end
+
+	if isPlayerObject(drop) then
+		return
+	end
+
+	if isVehicleOrAircraft(drop) then
+		return
+	end
+
+	local root = getRoot()
+
+	if not root then
+		return
+	end
+
+	local position = drop.Position
+
+	local targetPosition = Vector3.new(
+		position.X,
+		position.Y + 4,
+		position.Z
+	)
+
+	root.CFrame = CFrame.new(targetPosition)
+
+	currentDrop = drop
+
+	print("🦊 FOX_SHOP")
+	print("✅ تم اكتشاف Sky Drop")
+	print("📍 X:", position.X)
+	print("📍 Y:", position.Y)
+	print("📍 Z:", position.Z)
+
+	status.Text = "📍 تم الوصول إلى Drop"
+
+	task.wait(0.25)
+
+	if not enabled then
+		return
+	end
+
+	-- =========================
+	-- تفعيل ProximityPrompt
+	-- =========================
+
+	local promptWorked =
+		holdDropPrompt(drop)
+
+	if not promptWorked then
+
+		currentDrop = nil
+
+		return
+
+	end
+
+	-- =========================
+	-- حل المعادلة
+	-- =========================
+
+	waitingForManualSolve = true
+
+	solveEquation()
+
+	-- إعطاء اللعبة وقتًا لمعالجة التأكيد
+	task.wait(0.5)
+
+	-- =========================
+	-- انتظار انتهاء الـDrop
+	-- =========================
+
+	status.Text = "⏳ انتظار نتيجة الـDrop..."
+
+	local startWait = os.clock()
+	local MAX_WAIT = 60
+
+	while enabled
+		and drop.Parent
+		and os.clock() - startWait < MAX_WAIT do
+
+		local promptStillThere =
+			findDropPrompt(drop)
+
+		if not promptStillThere then
+			break
+		end
+
+		task.wait(0.25)
+
+	end
+
+	waitingForManualSolve = false
+	currentDrop = nil
+
+	if not enabled then
+		return
+	end
+
+	status.Text = "🔎 يبحث عن Drop جديد..."
+
+end
+
+-- =========================
+-- زر التشغيل
+-- =========================
+
+button.MouseButton1Click:Connect(function()
+
+	if not unlocked then
+		return
+	end
+
+	if waitingForManualSolve then
+		return
+	end
+
+	enabled = not enabled
+
+	if enabled then
+
+		button.Text = "⏹ إيقاف"
+		status.Text = "🟢 يبحث عن Drop..."
+
+		candidates = {}
+
+		for _, object in ipairs(workspace:GetDescendants()) do
+
+			if object:IsA("BasePart") then
+				registerObject(object)
+			end
+
+		end
+
+	else
+
+		button.Text = "▶ تشغيل"
+		status.Text = "🔴 يبحث: متوقف"
+
+		candidates = {}
+
+		waitingForManualSolve = false
+		currentDrop = nil
+
+	end
+
+end)
+
+-- =========================
+-- المراقبة المستمرة
+-- =========================
+
+RunService.Heartbeat:Connect(function()
+
+	if not enabled then
+		return
+	end
+
+	if waitingForManualSolve then
+		return
+	end
+
+	if os.clock() - lastTeleport < TELEPORT_COOLDOWN then
+		return
+	end
+
+	local detectedDrop = nil
+
+	for object, data in pairs(candidates) do
+
+		if checkDrop(object, data) then
+
+			detectedDrop = object
+
+			break
+
+		end
+
+	end
+
+	if detectedDrop then
+
+		lastTeleport = os.clock()
+
+		candidates[detectedDrop] = nil
+
+		task.spawn(function()
+
+			teleportToDrop(detectedDrop)
+		end)
+
+	end
+
+end)
+
+-- =========================
+-- رسالة بداية
+-- =========================
+
+print("🦊 FOX_SHOP Sky Drop Detector loaded")
+print("🔐 Password:", PASSWORD)
+print("🧮 Equation Solver: ON")
+print("📱 Touch Drag: ON")
+print("🖱️ Mouse Drag: ON")
